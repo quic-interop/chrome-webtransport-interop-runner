@@ -3,9 +3,8 @@
 import argparse
 import os
 import array
-
+import sys
 from urllib.parse import urlparse
-
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -19,41 +18,39 @@ def get_args():
 DOWNLOADS = "/downloads/"
 
 requests = os.environ["REQUESTS"].split(" ")
+protocols = os.environ["PROTOCOLS"].split(",")
 
 options = webdriver.ChromeOptions()
-options.gpu = False
 options.binary_location = "/usr/bin/google-chrome-beta"
 options.add_argument("--no-sandbox")
+options.add_argument("--headless")
+options.add_argument("--enable-quic")
+options.add_argument("--disable-gpu")
+options.add_argument("--disable-setuid-sandbox")
 options.add_argument("--log-net-log=/logs/chrome.json")
 options.add_argument("--net-log-capture-mode=IncludeSensitive")
-options.add_argument("--enable-experimental-web-platform-features")
-options.add_argument("--enable-features=WebTransport,WebTransportHttp3")
-options.add_argument("--headless=new")
+options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
 o = urlparse(requests[0])
 server = o.netloc
 path = o.path
 
-with open("script_template.js") as f:
-    script = f.read()
-script = script.replace("%%SERVER%%", server)
-script = script.replace("%%TESTCASE%%", os.environ["TESTCASE"])
-script = script.replace("%%CERTHASH%%", get_args().certhash)
-
-with open('/script.js', 'w') as file:
-    file.write(script)
-
-with open('/index.html', 'w') as file:
-    file.write("<html><head><script src='script.js'></script></head></html>")
-
-service = Service(executable_path="/usr/bin/chromedriver")
-driver = webdriver.Chrome(service=service, options=options)
+driver = webdriver.Chrome(options=options)
 driver.get("file:///index.html")
-data = driver.execute_script("return request('" + path + "');")
+script = (
+    "return establishSession('" + requests[0] + "', '" + get_args().certhash + "', "
+    + '[' + ', '.join("'" + p.strip() + "'" for p in protocols) + ']'
+    + ");"
+)
+print(script)
+data = driver.execute_script(script)
+print(data)
 
-a = array.array('B')
-a.extend(data)
-with open(DOWNLOADS + path, 'wb') as file:
-    file.write(a)
+with open(DOWNLOADS + "negotiated_protocol.txt", "wb") as f:
+    f.write(data.encode("utf-8"))
 
-driver.close()
+# for debugging, print all the console messages
+for entry in driver.get_log("browser"):
+    print(entry)
+
+driver.quit()

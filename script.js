@@ -7,12 +7,13 @@ function base64ToArrayBuffer(base64) {
     return bytes.buffer;
 }
 
-async function establishSession(url) {
+async function establishSession(url, certhash, protocols) {
     const transport = new WebTransport(url, {
         "serverCertificateHashes": [{
             "algorithm": "sha-256",
-            "value": base64ToArrayBuffer("%%CERTHASH%%")
-        }]
+            "value": base64ToArrayBuffer(certhash),  
+        }],
+        "protocols": protocols
     });
 
     transport.closed.then(() => {
@@ -23,7 +24,13 @@ async function establishSession(url) {
 
     // Once .ready fulfills, the connection can be used.
     await transport.ready;
-    return transport;
+    console.log("Transport ready.");
+    console.log(transport);
+    console.log(transport.protocol);
+    
+    const protocol = transport.protocol;
+    transport.close();
+    return protocol;
 }
 
 async function readFromStream(reader) {
@@ -47,24 +54,24 @@ async function readFromStream(reader) {
     return data
 }
 
-async function request(path) {
-    const transport = await establishSession('https://%%SERVER%%/webtransport');
-    const data = new TextEncoder().encode("GET " + path + "\r\n");
+// async function request(path) {
+//     const transport = await establishSession('https://%%SERVER%%/webtransport');
+//     const data = new TextEncoder().encode("GET " + path + "\r\n");
 
-    const { writable, readable } = await transport.createBidirectionalStream();
-    console.log("Opened stream.");
+//     const { writable, readable } = await transport.createBidirectionalStream();
+//     console.log("Opened stream.");
 
-    const writer = writable.getWriter();
-    await writer.write(data);
-    try {
-        await writer.close();
-        console.log("All data has been sent on stream.");
-    } catch(error) {
-        console.error(`An error occurred: ${error}`);
-    }
+//     const writer = writable.getWriter();
+//     await writer.write(data);
+//     try {
+//         await writer.close();
+//         console.log("All data has been sent on stream.");
+//     } catch(error) {
+//         console.error(`An error occurred: ${error}`);
+//     }
 
-    const rsp = await readFromStream(readable.getReader());
-    transport.close();
-    return rsp;
-}
+//     const rsp = await readFromStream(readable.getReader());
+//     transport.close();
+//     return rsp;
+// }
 

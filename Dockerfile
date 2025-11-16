@@ -2,27 +2,25 @@ FROM martenseemann/quic-network-simulator-endpoint:latest AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+RUN apt-get update && apt-get install -y wget gnupg2
+RUN mkdir -p /etc/apt/keyrings && \
+  wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg
+RUN echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list
+
 RUN apt-get update && \
-  apt-get install -y gnupg2 python3 python3-pip unzip && \
+  apt-get install -y python3 python3-pip unzip google-chrome-beta && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --break-system-packages selenium
 
-RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
-RUN echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list
-
-RUN apt-get update && \
-  apt-get install -y google-chrome-beta
-
-
-ENV CHROMEDRIVER_VERSION="123.0.6312.46"
+ENV CHROMEDRIVER_VERSION="143.0.7499.25"
 RUN wget -q "https://storage.googleapis.com/chrome-for-testing-public/$CHROMEDRIVER_VERSION/linux64/chromedriver-linux64.zip" && \
   unzip chromedriver-linux64.zip && \
   mv chromedriver-linux64/chromedriver /usr/bin && \
   chmod +x /usr/bin/chromedriver && \
   rm chromedriver-linux64.zip
 
-COPY script_template.js run.py run_endpoint.sh /
+COPY script.js index.html run.py run_endpoint.sh /
 
 ENTRYPOINT [ "/run_endpoint.sh" ]
