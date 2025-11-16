@@ -3,7 +3,9 @@ FROM martenseemann/quic-network-simulator-endpoint:latest AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && \
-  apt-get install -y gnupg2 python3 python3-pip unzip
+  apt-get install -y gnupg2 python3 python3-pip unzip && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install selenium
 
