@@ -14,7 +14,7 @@ RUN apt-get update && \
 
 RUN pip3 install --break-system-packages selenium
 
-ENV CHROMEDRIVER_VERSION="143.0.7499.25"
+ENV CHROMEDRIVER_VERSION="146.0.7680.0"
 RUN wget -q "https://storage.googleapis.com/chrome-for-testing-public/$CHROMEDRIVER_VERSION/linux64/chromedriver-linux64.zip" && \
   unzip chromedriver-linux64.zip && \
   mv chromedriver-linux64/chromedriver /usr/bin && \

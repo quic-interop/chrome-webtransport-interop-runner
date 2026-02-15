@@ -35,16 +35,20 @@ o = urlparse(requests[0])
 server = o.netloc
 path = o.path
 
-driver = webdriver.Chrome(options=options)
+driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)
+driver.set_script_timeout(30)
 driver.get("file:///index.html")
 script = (
     "return establishSession('" + requests[0] + "', '" + get_args().certhash + "', "
     + '[' + ', '.join("'" + p.strip() + "'" for p in protocols) + ']'
     + ");"
 )
-print(script)
-data = driver.execute_script(script)
-print(data)
+try:
+    data = driver.execute_script(script)
+    print(f"session established, negotiated protocol: {data}")
+except Exception as e:
+    print(f"execute_script failed: {e}")
+    raise
 
 with open(DOWNLOADS + "negotiated_protocol.txt", "wb") as f:
     f.write(data.encode("utf-8"))
