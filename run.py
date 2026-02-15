@@ -10,15 +10,11 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--certhash", help="server certificate hash")
-    return parser.parse_args()
-
 DOWNLOADS = "/downloads/"
 
 requests = os.environ["REQUESTS"].split(" ")
 protocols = os.environ["PROTOCOLS"].split(",")
+certhash = os.environ["CERTHASH"]
 
 options = webdriver.ChromeOptions()
 options.binary_location = "/usr/bin/google-chrome-beta"
@@ -39,7 +35,7 @@ driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opti
 driver.set_script_timeout(30)
 driver.get("file:///index.html")
 script = (
-    "return establishSession('" + requests[0] + "', '" + get_args().certhash + "', "
+    "return establishSession('" + requests[0] + "', '" + certhash + "', "
     + '[' + ', '.join("'" + p.strip() + "'" for p in protocols) + ']'
     + ");"
 )
