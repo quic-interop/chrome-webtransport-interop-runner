@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
-import argparse
 import os
-import array
 import sys
 from urllib.parse import urlparse
 from selenium import webdriver
@@ -12,6 +10,11 @@ from selenium.webdriver.common.by import By
 
 DOWNLOADS = "/downloads/"
 
+testcase = os.environ["TESTCASE"]
+
+if testcase != "handshake":
+    sys.exit(127)
+    
 requests = os.environ["REQUESTS"].split(" ")
 protocols = os.environ["PROTOCOLS"].split(",")
 certhash = os.environ["CERTHASH"]

@@ -3,13 +3,6 @@
 # Set up the routing needed for the simulation.
 /setup.sh
 
-if [ ! -z "$TESTCASE" ]; then
-    case "$TESTCASE" in
-        "handshake") ;;
-        *) exit 127 ;;
-    esac
-fi
-
 service dbus start
 
 CERTHASH=$(openssl x509 -in /certs/cert.pem -outform DER | openssl dgst -sha256 -binary | base64)
