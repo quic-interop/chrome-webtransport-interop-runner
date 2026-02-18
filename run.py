@@ -62,20 +62,20 @@ driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opti
 driver.set_script_timeout(120)
 driver.get("file:///index.html")
 func_name = testcases.get(testcase)
-script = f"return {func_name}('{requests[0]}', '{certhash}', {json.dumps(protocols)}, {json.dumps(filenames)});"
+script = f"return {func_name}(...arguments);"
 
 try:
-    data = driver.execute_script(script)
-    print(f"session established, negotiated protocol: {data['protocol']}")
+    result = driver.execute_script(script, requests[0], certhash, protocols, filenames)
+    print(f"session established, negotiated protocol: {result['protocol']}")
 except Exception as e:
     print(f"execute_script failed: {e}")
     raise
 
 with open(DOWNLOADS + "negotiated_protocol.txt", "wb") as f:
-    f.write(data['protocol'].encode("utf-8"))
+    f.write(result['protocol'].encode("utf-8"))
 
 if testcase == "transfer-unidirectional-receive":
-    for filename, chunk in data['files'].items():
+    for filename, chunk in result['files'].items():
         raw = bytes(chunk)
         print(f"downloaded file: {filename}, size: {len(raw)}")
         full_path = DOWNLOADS + filename
