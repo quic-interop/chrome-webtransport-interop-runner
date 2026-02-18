@@ -1,7 +1,10 @@
+window.runHandshake = runHandshake;
+window.runTransferUnidirectional = runTransferUnidirectional;
+
 function base64ToArrayBuffer(base64) {
     var binaryString = atob(base64);
     var bytes = new Uint8Array(binaryString.length);
-    for (var i = 0; i < binaryString.length; i++) {
+    for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
@@ -72,7 +75,7 @@ async function readHeader(reader) {
         const { value, done } = await reader.read();
         if (done) break;
 
-        let newBuffer = new Uint8Array(buffer.length + value.length);
+        const newBuffer = new Uint8Array(buffer.length + value.length);
         newBuffer.set(buffer);
         newBuffer.set(value, buffer.length);
         buffer = newBuffer;
@@ -127,15 +130,4 @@ async function sendGetRequest(transport, filename) {
     
     await writer.write(encoder.encode(`GET ${filename}`));
     await writer.close();
-}
-
-function flattenChunks(chunks) {
-    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-    const data = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-        data.set(chunk, offset);
-        offset += chunk.length;
-    }
-    return Array.from(data);
 }
