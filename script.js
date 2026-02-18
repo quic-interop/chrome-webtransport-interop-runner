@@ -7,71 +7,135 @@ function base64ToArrayBuffer(base64) {
     return bytes.buffer;
 }
 
-async function establishSession(url, certhash, protocols) {
+async function runHandshake(url, certhash, protocols) {
     const transport = new WebTransport(url, {
-        "serverCertificateHashes": [{
-            "algorithm": "sha-256",
-            "value": base64ToArrayBuffer(certhash),  
-        }],
+        "serverCertificateHashes": [{ "algorithm": "sha-256", "value": base64ToArrayBuffer(certhash) }],
         "protocols": protocols
     });
-
-    transport.closed.then(() => {
-        console.log(`The HTTP/3 connection to ${url} closed gracefully.`);
-    }).catch((error) => {
-        console.error(`The HTTP/3 connection to ${url} closed due to ${error}.`);
-    });
-
-    // Once .ready fulfills, the connection can be used.
     await transport.ready;
-    console.log("Transport ready.");
-    console.log(transport);
-    console.log(transport.protocol);
+    const protocol = transport.protocol;
+    return { protocol: protocol };
+}
+
+async function handleIncomingPushes(transport, expectedCount, results) {
+    const reader = transport.incomingUnidirectionalStreams.getReader();
+    const processingPromises = [];
+
+    for (let i = 0; i < expectedCount; i++) {
+        // We must await the next stream object from the queue...
+        const { value: stream, done } = await reader.read();
+        if (done) break;
+
+        // ...but we don't await the processing. 
+        // We start it immediately and store the promise to track completion.
+        const p = (async () => {
+            try {
+                const { filename, data } = await processIncomingStream(stream);
+                results[filename] = Array.from(data);
+                console.log(`[Uni] Finished: ${filename} (${data.length} bytes)`);
+            } catch (err) {
+                console.error("[Uni] Stream processing failed:", err);
+            }
+        })();
+        
+        processingPromises.push(p);
+    }
+
+    // Now we wait for all background workers to finish
+    await Promise.all(processingPromises);
+    reader.releaseLock();
+}
+
+async function runTransferUnidirectional(url, certhash, protocols, filenames) {
+    const transport = new WebTransport(url, {
+        "serverCertificateHashes": [{ "algorithm": "sha-256", "value": base64ToArrayBuffer(certhash) }],
+        "protocols": protocols
+    });
+    await transport.ready;
+
+    const results = {};
+    
+    // launch the listener and handle requests in parallel
+    const receivePromise = handleIncomingPushes(transport, filenames.length, results);
+    const requestPromises = filenames.map(file => sendGetRequest(transport, file));
+
+    // wait for all GETs to be sent and all PUSHes to be fully read
+    await Promise.all([...requestPromises, receivePromise]);
     
     const protocol = transport.protocol;
-    transport.close();
-    return protocol;
+    return { protocol:protocol, files: results };
 }
 
-async function readFromStream(reader) {
-    let chunks = [];
-    let totalLength = 0;
-
+async function readHeader(reader) {
+    let buffer = new Uint8Array(0);
     while (true) {
         const { value, done } = await reader.read();
-        if (done) { break; }
-        chunks.push(value);
-        totalLength += value.length;
-    }
+        if (done) break;
 
-    // Combine all chunks into a single Uint8Array
-    let data = new Uint8Array(totalLength);
-    let position = 0;
-    for (let chunk of chunks) {
-        data.set(chunk, position);
-        position += chunk.length;
+        let newBuffer = new Uint8Array(buffer.length + value.length);
+        newBuffer.set(buffer);
+        newBuffer.set(value, buffer.length);
+        buffer = newBuffer;
+
+        const newlineIndex = buffer.indexOf(10); // 10 is '\n'
+        if (newlineIndex !== -1) {
+            return {
+                header: buffer.slice(0, newlineIndex),
+                remainingBuffer: buffer.slice(newlineIndex + 1)
+            };
+        }
     }
-    return data
+    return { header: buffer, remainingBuffer: new Uint8Array(0) };
 }
 
-// async function request(path) {
-//     const transport = await establishSession('https://%%SERVER%%/webtransport');
-//     const data = new TextEncoder().encode("GET " + path + "\r\n");
+// reads header and body of a single stream
+async function processIncomingStream(stream) {
+    const reader = stream.getReader();
+    try {
+        const { header, remainingBuffer } = await readHeader(reader);
+        const filename = new TextDecoder().decode(header).replace("PUSH ", "").trim();
 
-//     const { writable, readable } = await transport.createBidirectionalStream();
-//     console.log("Opened stream.");
+        const chunks = [];
+        if (remainingBuffer.length > 0) chunks.push(remainingBuffer);
 
-//     const writer = writable.getWriter();
-//     await writer.write(data);
-//     try {
-//         await writer.close();
-//         console.log("All data has been sent on stream.");
-//     } catch(error) {
-//         console.error(`An error occurred: ${error}`);
-//     }
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+        }
 
-//     const rsp = await readFromStream(readable.getReader());
-//     transport.close();
-//     return rsp;
-// }
+        // merge chunks into one Uint8Array
+        const totalLength = chunks.reduce((acc, curr) => acc + curr.length, 0);
+        const data = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+            data.set(chunk, offset);
+            offset += chunk.length;
+        }
 
+        return { filename, data };
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+// opens a unidirectional stream and sends the "GET <filename>" command
+async function sendGetRequest(transport, filename) {
+    const stream = await transport.createUnidirectionalStream();
+    const writer = stream.getWriter();
+    const encoder = new TextEncoder();
+    
+    await writer.write(encoder.encode(`GET ${filename}`));
+    await writer.close();
+}
+
+function flattenChunks(chunks) {
+    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+    const data = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+        data.set(chunk, offset);
+        offset += chunk.length;
+    }
+    return Array.from(data);
+}
