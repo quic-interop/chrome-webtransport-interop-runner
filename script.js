@@ -23,7 +23,19 @@ async function handleIncomingPushes(transport, expectedCount, results) {
 
     for (let i = 0; i < expectedCount; i++) {
         // We must await the next stream object from the queue...
-        const { value: stream, done } = await reader.read();
+        let stream, done;
+        try {
+            const result = await reader.read();
+            stream = result.value;
+            done = result.done;
+        } catch (err) {
+            // Server may close the connection after sending all streams; treat as no more streams.
+            const msg = (err && (err.message || String(err))) || "";
+            if (/connection lost|closed|aborted/i.test(msg)) {
+                break;
+            }
+            throw err;
+        }
         if (done) break;
 
         // ...but we don't await the processing. 
@@ -129,13 +141,92 @@ async function sendGetRequest(transport, filename) {
     await writer.close();
 }
 
-function flattenChunks(chunks) {
-    const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-    const data = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-        data.set(chunk, offset);
-        offset += chunk.length;
+// Transfer test: respond to GET requests by sending PUSH + file contents.
+// The server sends GET requests on incoming unidirectional streams;
+// we respond by opening new unidirectional streams with PUSH <filename>\n + contents.
+// filesByFilename: { filename: array of byte values }
+async function runTransfer(url, certhash, protocols, filesByFilename) {
+    const transport = new WebTransport(url, {
+        "serverCertificateHashes": [{ "algorithm": "sha-256", "value": base64ToArrayBuffer(certhash) }],
+        "protocols": protocols
+    });
+    await transport.ready;
+
+    const decodedFiles = {};
+    for (const [name, arr] of Object.entries(filesByFilename)) {
+        decodedFiles[name] = new Uint8Array(arr);
     }
-    return Array.from(data);
+
+    const reader = transport.incomingUnidirectionalStreams.getReader();
+    const pushPromises = [];
+
+    while (true) {
+        let stream, done;
+        try {
+            const result = await reader.read();
+            stream = result.value;
+            done = result.done;
+        } catch (err) {
+            // the server closes the connection after receiving all PUSHes
+            const msg = (err && (err.message || String(err))) || "";
+            if (/connection lost|closed|aborted/i.test(msg)) {
+                break;
+            }
+            throw err;
+        }
+        if (done) break;
+
+        const p = (async () => {
+            try {
+                const filename = await readGetRequest(stream);
+                if (!filename || !decodedFiles[filename]) {
+                    console.error(`[Transfer] Unknown or missing file: ${filename}`);
+                    return;
+                }
+                const data = decodedFiles[filename];
+                const pushStream = await transport.createUnidirectionalStream();
+                const writer = pushStream.getWriter();
+                const encoder = new TextEncoder();
+                await writer.write(encoder.encode(`PUSH ${filename}\n`));
+                await writer.write(data);
+                await writer.close();
+                console.log(`[Transfer] PUSH sent: ${filename} (${data.length} bytes)`);
+            } catch (err) {
+                console.error("[Transfer] Request handling failed:", err);
+            }
+        })();
+        pushPromises.push(p);
+    }
+
+    await Promise.all(pushPromises);
+    reader.releaseLock();
+
+    const protocol = transport.protocol;
+    return { protocol };
+}
+
+async function readGetRequest(stream) {
+    const reader = stream.getReader();
+    const chunks = [];
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+        }
+        const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+        const buffer = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+            buffer.set(chunk, offset);
+            offset += chunk.length;
+        }
+        const request = new TextDecoder().decode(buffer).trim();
+        if (request.startsWith("GET ")) {
+            return request.slice(4).trim();
+        }
+        return null;
+    } finally {
+        reader.releaseLock();
+    }
 }
