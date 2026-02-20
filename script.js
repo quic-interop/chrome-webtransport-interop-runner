@@ -141,6 +141,57 @@ async function sendGetRequest(transport, filename) {
     await writer.close();
 }
 
+// Bidirectional transfer receive: for each file, open a bidirectional stream,
+// send "GET <filename>" on the writable side, then read raw file bytes (no header) from the readable side.
+async function runTransferBidirectional(url, certhash, protocols, filenames) {
+    const transport = new WebTransport(url, {
+        "serverCertificateHashes": [{ "algorithm": "sha-256", "value": base64ToArrayBuffer(certhash) }],
+        "protocols": protocols
+    });
+    await transport.ready;
+
+    const results = {};
+    const encoder = new TextEncoder();
+
+    const promises = filenames.map(async (filename) => {
+        const stream = await transport.createBidirectionalStream();
+        const writer = stream.writable.getWriter();
+        await writer.write(encoder.encode(`GET ${filename}`));
+        await writer.close();
+
+        const data = await readStreamToEnd(stream.readable);
+        results[filename] = Array.from(data);
+        console.log(`[Bi Receive] ${filename} (${data.length} bytes)`);
+    });
+
+    await Promise.all(promises);
+
+    const protocol = transport.protocol;
+    return { protocol, files: results };
+}
+
+async function readStreamToEnd(readable) {
+    const reader = readable.getReader();
+    const chunks = [];
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+        }
+        const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+        const buffer = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+            buffer.set(chunk, offset);
+            offset += chunk.length;
+        }
+        return buffer;
+    } finally {
+        reader.releaseLock();
+    }
+}
+
 // Transfer test: respond to GET requests on unidirectional or bidirectional streams
 // filesByFilename: { filename: array of byte values }
 async function runTransfer(url, certhash, protocols, filesByFilename) {
