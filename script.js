@@ -141,9 +141,7 @@ async function sendGetRequest(transport, filename) {
     await writer.close();
 }
 
-// Transfer test: respond to GET requests by sending PUSH + file contents.
-// The server sends GET requests on incoming unidirectional streams;
-// we respond by opening new unidirectional streams with PUSH <filename>\n + contents.
+// Transfer test: respond to GET requests on unidirectional or bidirectional streams
 // filesByFilename: { filename: array of byte values }
 async function runTransfer(url, certhash, protocols, filesByFilename) {
     const transport = new WebTransport(url, {
@@ -157,6 +155,16 @@ async function runTransfer(url, certhash, protocols, filesByFilename) {
         decodedFiles[name] = new Uint8Array(arr);
     }
 
+    const uniPromise = handleTransferUnidirectionalStreams(transport, decodedFiles);
+    const biPromise = handleTransferBidirectionalStreams(transport, decodedFiles);
+
+    await Promise.all([uniPromise, biPromise]);
+
+    const protocol = transport.protocol;
+    return { protocol };
+}
+
+async function handleTransferUnidirectionalStreams(transport, decodedFiles) {
     const reader = transport.incomingUnidirectionalStreams.getReader();
     const pushPromises = [];
 
@@ -180,7 +188,7 @@ async function runTransfer(url, certhash, protocols, filesByFilename) {
             try {
                 const filename = await readGetRequest(stream);
                 if (!filename || !decodedFiles[filename]) {
-                    console.error(`[Transfer] Unknown or missing file: ${filename}`);
+                    console.error(`[Transfer Uni] Unknown or missing file: ${filename}`);
                     return;
                 }
                 const data = decodedFiles[filename];
@@ -190,9 +198,9 @@ async function runTransfer(url, certhash, protocols, filesByFilename) {
                 await writer.write(encoder.encode(`PUSH ${filename}\n`));
                 await writer.write(data);
                 await writer.close();
-                console.log(`[Transfer] PUSH sent: ${filename} (${data.length} bytes)`);
+                console.log(`[Transfer Uni] PUSH sent: ${filename} (${data.length} bytes)`);
             } catch (err) {
-                console.error("[Transfer] Request handling failed:", err);
+                console.error("[Transfer Uni] Request handling failed:", err);
             }
         })();
         pushPromises.push(p);
@@ -200,9 +208,49 @@ async function runTransfer(url, certhash, protocols, filesByFilename) {
 
     await Promise.all(pushPromises);
     reader.releaseLock();
+}
 
-    const protocol = transport.protocol;
-    return { protocol };
+async function handleTransferBidirectionalStreams(transport, decodedFiles) {
+    const reader = transport.incomingBidirectionalStreams.getReader();
+    const responsePromises = [];
+
+    while (true) {
+        let stream, done;
+        try {
+            const result = await reader.read();
+            stream = result.value;
+            done = result.done;
+        } catch (err) {
+            const msg = (err && (err.message || String(err))) || "";
+            if (/connection lost|closed|aborted/i.test(msg)) {
+                break;
+            }
+            throw err;
+        }
+        if (done) break;
+
+        const p = (async () => {
+            const writer = stream.writable.getWriter();
+            try {
+                const filename = await readGetRequest(stream.readable);
+                if (!filename || !decodedFiles[filename]) {
+                    console.error(`[Transfer Bi] Unknown or missing file: ${filename}`);
+                    return;
+                }
+                const data = decodedFiles[filename];
+                await writer.write(data);
+                console.log(`[Transfer Bi] Sent on same stream: ${filename} (${data.length} bytes)`);
+            } catch (err) {
+                console.error("[Transfer Bi] Request handling failed:", err);
+            } finally {
+                await writer.close();
+            }
+        })();
+        responsePromises.push(p);
+    }
+
+    await Promise.all(responsePromises);
+    reader.releaseLock();
 }
 
 async function readGetRequest(stream) {
