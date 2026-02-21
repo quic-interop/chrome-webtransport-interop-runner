@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 
-import json
 import os
 import sys
 from collections import defaultdict
 from urllib.parse import urlparse
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
 
 DOWNLOADS = "/downloads/"
 WWW = "/www/"
@@ -18,6 +15,7 @@ testcases = {
     "transfer": "runTransfer",
     "transfer-unidirectional-receive": "runTransferUnidirectional",
     "transfer-bidirectional-receive": "runTransferBidirectional",
+    "transfer-datagram-receive": "runTransferDatagram",
 }
 
 testcase = os.environ["TESTCASE"]
@@ -111,7 +109,7 @@ except Exception as e:
 with open(DOWNLOADS + "negotiated_protocol.txt", "wb") as f:
     f.write(result['protocol'].encode("utf-8"))
 
-if testcase in ("transfer-unidirectional-receive", "transfer-bidirectional-receive"):
+if testcase in ("transfer-unidirectional-receive", "transfer-bidirectional-receive", "transfer-datagram-receive"):
     endpoint = get_endpoint_from_requests(os.environ["REQUESTS"])
     if not endpoint:
         print(f"{testcase} requires at least one request URL with endpoint path")

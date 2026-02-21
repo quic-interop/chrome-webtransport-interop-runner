@@ -170,6 +170,73 @@ async function runTransferBidirectional(url, certhash, protocols, filenames) {
     return { protocol, files: results };
 }
 
+async function runTransferDatagram(url, certhash, protocols, filenames) {
+    const transport = new WebTransport(url, {
+        "serverCertificateHashes": [{ "algorithm": "sha-256", "value": base64ToArrayBuffer(certhash) }],
+        "protocols": protocols
+    });
+    await transport.ready;
+
+    const results = {};
+    const encoder = new TextEncoder();
+    const reader = transport.datagrams.readable.getReader();
+    const writer = transport.datagrams.writable.getWriter();
+    const expectedCount = filenames.length;
+    let received = 0;
+
+    const receivePromise = (async () => {
+        try {
+            while (received < expectedCount) {
+                let value, done;
+                try {
+                    const result = await reader.read();
+                    value = result.value;
+                    done = result.done;
+                } catch (err) {
+                    const msg = (err && (err.message || String(err))) || "";
+                    if (/connection lost|closed|aborted/i.test(msg)) break;
+                    throw err;
+                }
+                if (done) break;
+                const parsed = processIncomingDatagram(value);
+                if (parsed) {
+                    results[parsed.filename] = Array.from(parsed.data);
+                    console.log(`[Dgram] Finished: ${parsed.filename} (${parsed.data.length} bytes)`);
+                    received++;
+                }
+            }
+        } finally {
+            reader.releaseLock();
+        }
+    })();
+
+    const sendPromise = (async () => {
+        try {
+            for (const filename of filenames) {
+                await writer.write(encoder.encode(`GET ${filename}`));
+                await new Promise(r => setTimeout(r, 20));
+            }
+        } finally {
+            writer.releaseLock();
+        }
+    })();
+
+    await Promise.all([receivePromise, sendPromise]);
+
+    const protocol = transport.protocol;
+    return { protocol, files: results };
+}
+
+function processIncomingDatagram(buffer) {
+    const newlineIndex = buffer.indexOf(10);
+    if (newlineIndex === -1) return null;
+    const header = new TextDecoder().decode(buffer.slice(0, newlineIndex));
+    if (!header.startsWith("PUSH ")) return null;
+    const filename = header.slice(5).trim();
+    const data = buffer.slice(newlineIndex + 1);
+    return { filename, data };
+}
+
 async function readStreamToEnd(readable) {
     const reader = readable.getReader();
     const chunks = [];
@@ -192,7 +259,7 @@ async function readStreamToEnd(readable) {
     }
 }
 
-// Transfer test: respond to GET requests on unidirectional or bidirectional streams
+// Transfer test: respond to GET requests on unidirectional and bidirectional streams and datagrams
 // filesByFilename: { filename: array of byte values }
 async function runTransfer(url, certhash, protocols, filesByFilename) {
     const transport = new WebTransport(url, {
@@ -208,8 +275,9 @@ async function runTransfer(url, certhash, protocols, filesByFilename) {
 
     const uniPromise = handleTransferUnidirectionalStreams(transport, decodedFiles);
     const biPromise = handleTransferBidirectionalStreams(transport, decodedFiles);
+    const dgramPromise = handleTransferDatagrams(transport, decodedFiles);
 
-    await Promise.all([uniPromise, biPromise]);
+    await Promise.all([uniPromise, biPromise, dgramPromise]);
 
     const protocol = transport.protocol;
     return { protocol };
@@ -259,6 +327,45 @@ async function handleTransferUnidirectionalStreams(transport, decodedFiles) {
 
     await Promise.all(pushPromises);
     reader.releaseLock();
+}
+
+async function handleTransferDatagrams(transport, decodedFiles) {
+    const reader = transport.datagrams.readable.getReader();
+    const writer = transport.datagrams.writable.getWriter();
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    try {
+        while (true) {
+            let value, done;
+            try {
+                const result = await reader.read();
+                value = result.value;
+                done = result.done;
+            } catch (err) {
+                const msg = (err && (err.message || String(err))) || "";
+                if (/connection lost|closed|aborted/i.test(msg)) break;
+                throw err;
+            }
+            if (done) break;
+            const request = decoder.decode(value).trim();
+            if (!request.startsWith("GET ")) continue;
+            const filename = request.slice(4).trim();
+            if (!decodedFiles[filename]) {
+                console.error(`[Transfer Dgram] Unknown or missing file: ${filename}`);
+                continue;
+            }
+            const data = decodedFiles[filename];
+            const header = encoder.encode(`PUSH ${filename}\n`);
+            const payload = new Uint8Array(header.length + data.length);
+            payload.set(header);
+            payload.set(data, header.length);
+            writer.write(payload);
+            console.log(`[Transfer Dgram] PUSH sent: ${filename} (${data.length} bytes)`);
+        }
+    } finally {
+        reader.releaseLock();
+        writer.releaseLock();
+    }
 }
 
 async function handleTransferBidirectionalStreams(transport, decodedFiles) {
