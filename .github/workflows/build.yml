@@ -6,7 +6,7 @@ on:
     branches: [ master ]
 
 jobs:
-  build:
+  build-chrome:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -16,8 +16,27 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-      - name: Build endpoint
+      - name: Build
         uses: docker/build-push-action@v6
         with:
+          context: .
+          file: ./Dockerfile_chrome
           push: ${{ github.event_name == 'push' }}
           tags: martenseemann/chrome-webtransport-interop-runner:latest
+  build-firefox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        if: ${{ github.event_name == 'push' }}
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile_firefox
+          push: ${{ github.event_name == 'push' }}
+          tags: martenseemann/firefox-webtransport-interop-runner:latest

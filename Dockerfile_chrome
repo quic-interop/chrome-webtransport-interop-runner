@@ -21,6 +21,8 @@ RUN wget -q "https://storage.googleapis.com/chrome-for-testing-public/$CHROMEDRI
   chmod +x /usr/bin/chromedriver && \
   rm chromedriver-linux64.zip
 
-COPY script.js index.html run.py run_endpoint.sh /
+COPY script.js index.html run_chrome.py run.py run_endpoint_chrome.sh /
+
+RUN mv /run_endpoint_chrome.sh /run_endpoint.sh && chmod +x /run_endpoint.sh
 
 ENTRYPOINT [ "/run_endpoint.sh" ]

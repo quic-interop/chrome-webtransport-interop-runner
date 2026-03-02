@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
+"""Shared test logic for WebTransport interop runner (Chrome and Firefox)."""
 
 import os
 import sys
 from collections import defaultdict
 from urllib.parse import urlparse
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 
 DOWNLOADS = "/downloads/"
 WWW = "/www/"
@@ -18,11 +16,6 @@ testcases = {
     "transfer-datagram-receive": "runTransferDatagram",
 }
 
-testcase = os.environ["TESTCASE"]
-
-if testcase not in testcases:
-    print(f"Unknown TESTCASE: '{testcase}'. TESTCASE must be one of: {', '.join(testcases.keys())}")
-    sys.exit(127)
 
 def parse_client_requests(s: str) -> dict[str, list[str]]:
     """Parse REQUESTS env (space-separated URLs) into host+first_segment -> list of path tails."""
@@ -64,67 +57,115 @@ def load_files_for_endpoint(endpoint: str) -> dict[str, list[int]]:
     return files
 
 
-requests_list = [r for r in os.environ["REQUESTS"].split(" ") if r]
-if not requests_list:
-    print("REQUESTS must contain at least one URL")
-    sys.exit(1)
-url = requests_list[0]
-protocols = os.environ["PROTOCOLS"].split(" ")
-certhash = os.environ["CERTHASH"]
-request_map = parse_client_requests(os.environ["REQUESTS"])
-filenames = next(iter(request_map.values()), []) if request_map else []
+def exit_if_unsupported_testcase() -> None:
+    """Exit with sentinel 127 if TESTCASE is not supported. Call before starting the browser."""
+    testcase = os.environ.get("TESTCASE")
+    if not testcase or testcase not in testcases:
+        print(
+            f"Unknown TESTCASE: '{testcase}'. TESTCASE must be one of: {', '.join(testcases.keys())}"
+        )
+        sys.exit(127)
 
-options = webdriver.ChromeOptions()
-options.binary_location = "/usr/bin/google-chrome-beta"
-options.add_argument("--no-sandbox")
-options.add_argument("--headless")
-options.add_argument("--enable-quic")
-options.add_argument("--disable-gpu")
-options.add_argument("--disable-setuid-sandbox")
-options.add_argument("--log-net-log=/logs/chrome.json")
-options.add_argument("--net-log-capture-mode=IncludeSensitive")
-options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
 
-driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=options)
-driver.set_script_timeout(120)
-driver.get("file:///index.html")
-func_name = testcases.get(testcase)
-script = f"return {func_name}(...arguments);"
+def get_config() -> dict:
+    """Read and validate env; return config dict. Exits on error."""
+    testcase = os.environ.get("TESTCASE")
+    if not testcase or testcase not in testcases:
+        print(
+            f"Unknown TESTCASE: '{testcase}'. TESTCASE must be one of: {', '.join(testcases.keys())}"
+        )
+        sys.exit(127)
 
-try:
+    requests_str = os.environ.get("REQUESTS", "")
+    requests_list = [r for r in requests_str.split(" ") if r]
+    if not requests_list:
+        print("REQUESTS must contain at least one URL")
+        sys.exit(1)
+
+    url = requests_list[0]
+    protocols = os.environ["PROTOCOLS"].split(" ")
+    certhash = os.environ["CERTHASH"]
+    request_map = parse_client_requests(requests_str)
+    filenames = next(iter(request_map.values()), []) if request_map else []
+
+    config = {
+        "testcase": testcase,
+        "url": url,
+        "protocols": protocols,
+        "certhash": certhash,
+        "request_map": request_map,
+        "filenames": filenames,
+    }
+
     if testcase == "transfer":
-        endpoint = get_endpoint_from_requests(os.environ["REQUESTS"])
+        endpoint = get_endpoint_from_requests(requests_str)
         if not endpoint:
             print("transfer test requires at least one request URL with endpoint path")
             sys.exit(1)
-        files_by_filename = load_files_for_endpoint(endpoint)
-        result = driver.execute_script(script, url, certhash, protocols, files_by_filename)
+        config["endpoint"] = endpoint
+        config["files_by_filename"] = load_files_for_endpoint(endpoint)
+
+    if testcase in (
+        "transfer-unidirectional-receive",
+        "transfer-bidirectional-receive",
+        "transfer-datagram-receive",
+    ):
+        endpoint = get_endpoint_from_requests(requests_str)
+        if not endpoint:
+            print(f"{testcase} requires at least one request URL with endpoint path")
+            sys.exit(1)
+        config["endpoint"] = endpoint
+
+    return config
+
+
+def run_test(driver) -> None:
+    """Run the WebTransport test using the given Selenium WebDriver."""
+    config = get_config()
+    testcase = config["testcase"]
+    url = config["url"]
+    protocols = config["protocols"]
+    certhash = config["certhash"]
+    filenames = config["filenames"]
+
+    driver.set_script_timeout(120)
+    driver.get("file:///index.html")
+
+    func_name = testcases[testcase]
+    script = f"return {func_name}(...arguments);"
+
+    if testcase == "transfer":
+        result = driver.execute_script(
+            script,
+            url,
+            certhash,
+            protocols,
+            config["files_by_filename"],
+        )
     else:
         result = driver.execute_script(script, url, certhash, protocols, filenames)
         print(f"session established, negotiated protocol: {result['protocol']}")
-except Exception as e:
-    print(f"execute_script failed: {e}")
-    raise
 
-with open(DOWNLOADS + "negotiated_protocol.txt", "wb") as f:
-    f.write(result['protocol'].encode("utf-8"))
+    with open(DOWNLOADS + "negotiated_protocol.txt", "wb") as f:
+        f.write(result["protocol"].encode("utf-8"))
 
-if testcase in ("transfer-unidirectional-receive", "transfer-bidirectional-receive", "transfer-datagram-receive"):
-    endpoint = get_endpoint_from_requests(os.environ["REQUESTS"])
-    if not endpoint:
-        print(f"{testcase} requires at least one request URL with endpoint path")
-        sys.exit(1)
-    download_dir = os.path.join(DOWNLOADS, endpoint)
-    os.makedirs(download_dir, exist_ok=True)
-    for filename, chunk in result['files'].items():
-        raw = bytes(chunk)
-        print(f"downloaded file: {filename}, size: {len(raw)}")
-        full_path = os.path.join(download_dir, filename)
-        with open(full_path, "wb") as f:
-            f.write(raw)
+    if testcase in (
+        "transfer-unidirectional-receive",
+        "transfer-bidirectional-receive",
+        "transfer-datagram-receive",
+    ):
+        endpoint = config["endpoint"]
+        download_dir = os.path.join(DOWNLOADS, endpoint)
+        os.makedirs(download_dir, exist_ok=True)
+        for filename, chunk in result["files"].items():
+            raw = bytes(chunk)
+            print(f"downloaded file: {filename}, size: {len(raw)}")
+            full_path = os.path.join(download_dir, filename)
+            with open(full_path, "wb") as f:
+                f.write(raw)
 
-# for debugging, print all the console messages
-for entry in driver.get_log("browser"):
-    print(entry)
-
-driver.quit()
+    try:
+        for entry in driver.get_log("browser"):
+            print(entry)
+    except Exception:
+        pass  # Browser log not supported on all drivers (e.g. some Firefox setups)
