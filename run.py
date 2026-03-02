@@ -134,20 +134,25 @@ def run_test(driver) -> None:
     func_name = testcases[testcase]
     script = f"return {func_name}(...arguments);"
 
+    # Firefox currently does not support protocol negotiation, and fails the test
+    # if we pass protocols to the WebTransport constructor.
+    test_protocols = protocols if testcase == "handshake" else []
+
     if testcase == "transfer":
         result = driver.execute_script(
             script,
             url,
             certhash,
-            protocols,
+            test_protocols,
             config["files_by_filename"],
         )
     else:
-        result = driver.execute_script(script, url, certhash, protocols, filenames)
+        result = driver.execute_script(script, url, certhash, test_protocols, filenames)
         print(f"session established, negotiated protocol: {result['protocol']}")
 
+    protocol_str = result["protocol"] if result["protocol"] is not None else ""
     with open(DOWNLOADS + "negotiated_protocol.txt", "wb") as f:
-        f.write(result["protocol"].encode("utf-8"))
+        f.write(protocol_str.encode("utf-8"))
 
     if testcase in (
         "transfer-unidirectional-receive",
@@ -164,8 +169,5 @@ def run_test(driver) -> None:
             with open(full_path, "wb") as f:
                 f.write(raw)
 
-    try:
-        for entry in driver.get_log("browser"):
-            print(entry)
-    except Exception:
-        pass  # Browser log not supported on all drivers (e.g. some Firefox setups)
+    for entry in driver.get_log("browser"):
+        print(entry)
