@@ -69,7 +69,7 @@ if not requests_list:
     print("REQUESTS must contain at least one URL")
     sys.exit(1)
 url = requests_list[0]
-protocols = os.environ["PROTOCOLS"].split(",")
+protocols = os.environ["PROTOCOLS"].split(" ")
 certhash = os.environ["CERTHASH"]
 request_map = parse_client_requests(os.environ["REQUESTS"])
 filenames = next(iter(request_map.values()), []) if request_map else []
