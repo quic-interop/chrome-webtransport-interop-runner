@@ -14,6 +14,9 @@ async function runHandshake(url, certhash, protocols) {
     });
     await transport.ready;
     const protocol = transport.protocol;
+    try {
+        transport.close();
+    } catch (_) {}
     return { protocol: protocol };
 }
 
